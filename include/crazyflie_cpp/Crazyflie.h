@@ -3,7 +3,6 @@
 #include <cstring>
 #include <sstream>
 #include <functional>
-#include <math.h>
 
 #include "Crazyradio.h"
 #include "crtp.h"
@@ -20,9 +19,9 @@ public:
   Logger() {}
   virtual ~Logger() {}
 
-  virtual void info(const std::string& /*msg*/) {}
-  virtual void warning(const std::string& /*msg*/) {}
-  virtual void error(const std::string& /*msg*/) {}
+  virtual void info(const std::string& msg) {}
+  virtual void warning(const std::string& msg) {}
+  virtual void error(const std::string& msg) {}
 };
 
 extern Logger EmptyLogger;
@@ -75,7 +74,7 @@ public:
   };
 
   struct LogTocEntry {
-    uint16_t id;
+    uint8_t id;
     LogType type;
     std::string group;
     std::string name;
@@ -92,10 +91,6 @@ public:
     MemoryTypeLED12   = 0x10,
     MemoryTypeLOCO    = 0x11,
     MemoryTypeTRAJ    = 0x12,
-    MemoryTypeLOCO2   = 0x13,
-    MemoryTypeLH      = 0x14,
-    MemoryTypeTester  = 0x15,
-    MemoryTypeUSD     = 0x16, // Crazyswarm experimental
   };
 
   struct MemoryTocEntry {
@@ -113,14 +108,7 @@ public:
 public:
   Crazyflie(
     const std::string& link_uri,
-    Logger& logger = EmptyLogger,
-    std::function<void(const char*)> consoleCb = nullptr);
-
-  int getProtocolVersion();
-
-  std::string getFirmwareVersion();
-
-  std::string getDeviceTypeName();
+    Logger& logger = EmptyLogger);
 
   void logReset();
 
@@ -137,8 +125,11 @@ public:
     float qx, float qy, float qz, float qw,
     float rollRate, float pitchRate, float yawRate);
 
-  void sendVelocityWorldSetpoint(
-    float x, float y, float z, float yawRate);
+  void sendGains(
+    float gain1, float gain2, float gain3,
+    float gain4, float gain5, float gain6,
+    float gain7, float gain8, float gain9,
+    float gain10, float gain11, float gain12, uint8_t port);
 
   void sendHoverSetpoint(
     float vx,
@@ -146,38 +137,26 @@ public:
     float yawrate,
     float zDistance);
 
+  void sendStop();
+
   void sendPositionSetpoint(
     float x,
     float y,
     float z,
     float yaw);
 
-  void notifySetpointsStop(uint32_t remainValidMillisecs);
-
-  void sendStop();
-
-  void emergencyStop();
-
-  void emergencyStopWatchdog();
-
   void sendExternalPositionUpdate(
     float x,
     float y,
     float z);
-
-  void sendExternalPoseUpdate(
-    float x, float y, float z,
-    float qx, float qy, float qz, float qw);
 
   void sendPing();
 
   void reboot();
   // returns new address
   uint64_t rebootToBootloader();
-
-  void rebootFromBootloader();
-
   void sysoff();
+  void trySysOff();
   void alloff();
   void syson();
   float vbat();
@@ -189,6 +168,8 @@ public:
     BootloaderTarget target,
     size_t size,
     std::vector<uint8_t>& data);
+
+  void setChannel(uint8_t channel);
 
   void requestLogToc(bool forceNoCache=false);
 
@@ -218,43 +199,16 @@ public:
   }
 
   template<class T>
-  void setParam(uint16_t id, const T& value) {
+  void setParam(uint8_t id, const T& value) {
     ParamValue v;
     memcpy(&v, &value, sizeof(value));
     setParam(id, v);
   }
 
-  template<class T>
-  void setParamByName(const char* group, const char* name, const T& value) {
-    crtpParamSetByNameRequest<T> request(group, name, value);
-    // sendPacketOrTimeoutInternal(reinterpret_cast<const uint8_t*>(&request), request.size());
-    startBatchRequest();
-    addRequestInternal(
-      reinterpret_cast<const uint8_t*>(&request), request.size(), request.responseSize() - 1);
-    handleRequests();
-    auto response = getRequestResult<crtpParamSetByNameResponse>(0);
-
-    uint8_t error = response->error(request.responseSize());
-    if (error != 0) {
-      std::stringstream sstr;
-      sstr << "Couldn't set parameter " << group << "." << name << "!";
-      if (error == ENOENT) {
-        sstr << "No such variable." << std::endl;
-      } else if (error == EINVAL) {
-        sstr << "Wrong type." << std::endl;
-      } else if (error == EACCES) {
-        sstr << "Variable is readonly." << std::endl;
-      } else {
-        sstr << " Error: " << (int)error << std::endl;
-      }
-      throw std::runtime_error(sstr.str());
-    }
-  }
-
   void startSetParamRequest();
 
   template<class T>
-  void addSetParam(uint16_t id, const T& value) {
+  void addSetParam(uint8_t id, const T& value) {
     ParamValue v;
     memcpy(&v, &value, sizeof(value));
     addSetParam(id, v);
@@ -264,7 +218,7 @@ public:
 
 
   template<class T>
-  T getParam(uint16_t id) const {
+  T getParam(uint8_t id) const {
     ParamValue v = getParam(id);
     return *(reinterpret_cast<T*>(&v));
   }
@@ -302,18 +256,21 @@ public:
       case LogTypeUint32:
       case LogTypeInt32:
       case LogTypeFloat:
-        return 4;
-        break;
-      default:
-        // assert(false);
-        return 0;
+      return 4;
+      break;
     }
   }
 
-
-  void setGenericPacketCallback(
-    std::function<void(const ITransport::Ack&)> cb) {
-    m_genericPacketCallback = cb;
+  /**
+   * Returns a copy of the en-queued CRTP packets which were not handled by
+   * handleAck.
+   * @return  A vector of Ack data structures, where each Ack contains the data
+   * from a single packet.
+   */
+  std::vector<Crazyradio::Ack> retrieveGenericPackets() {
+    std::vector<Crazyradio::Ack> packets = m_generic_packets;
+    m_generic_packets.clear();
+    return packets;
   }
 
   /**
@@ -349,64 +306,41 @@ public:
     bool relative = true,
     uint8_t groupMask = 0);
 
-  // Memory subsystem
-  void readUSDLogFile(
-    std::vector<uint8_t>& data);
-
 private:
-  void sendPacketInternal(
+  void sendPacket(
     const uint8_t* data,
     uint32_t length,
-    ITransport::Ack& result,
+    Crazyradio::Ack& result,
     bool useSafeLink = ENABLE_SAFELINK);
 
-  template<typename R>
-  void sendPacket(
-    const R& request,
-    ITransport::Ack& result,
-    bool useSafeLink = ENABLE_SAFELINK)
-  {
-    sendPacketInternal(
-      reinterpret_cast<const uint8_t*>(&request), sizeof(request), result, useSafeLink);
-  }
-
-  bool sendPacketInternal(
+  bool sendPacket(
     const uint8_t* data,
     uint32_t length,
     bool useSafeLink = ENABLE_SAFELINK);
 
-  template<typename R>
-  void sendPacket(
-    const R& request,
-    bool useSafeLink = ENABLE_SAFELINK)
-  {
-    sendPacketInternal(
-      reinterpret_cast<const uint8_t*>(&request), sizeof(request), useSafeLink);
-  }
-
- void sendPacketOrTimeoutInternal(
+ void sendPacketOrTimeout(
    const uint8_t* data,
    uint32_t length,
    bool useSafeLink = ENABLE_SAFELINK,
    float timeout = 1.0);
 
-  template<typename R>
-  void sendPacketOrTimeout(
-    const R& request,
-    bool useSafeLink = ENABLE_SAFELINK)
-  {
-    sendPacketOrTimeoutInternal(
-      reinterpret_cast<const uint8_t*>(&request), sizeof(request), useSafeLink);
-  }
-
   void handleAck(
-    const ITransport::Ack& result);
+    const Crazyradio::Ack& result);
 
+  std::vector<Crazyradio::Ack> m_generic_packets;
   std::vector<crtpPacket_t> m_outgoing_packets;
+
+  /**
+   * En-queues an unhandled Ack into a vector so that it can be retrieved later.
+   * @param result The unhandled Ack to be en-queued.
+   */
+  void queueGenericPacket(const Crazyradio::Ack& result) {
+    m_generic_packets.push_back(result);
+  }
 
   void startBatchRequest();
 
-  void addRequestInternal(
+  void addRequest(
     const uint8_t* data,
     size_t numBytes,
     size_t numBytesToMatch);
@@ -416,7 +350,7 @@ private:
     const R& request,
     size_t numBytesToMatch)
   {
-    addRequestInternal(
+    addRequest(
       reinterpret_cast<const uint8_t*>(&request), sizeof(request), numBytesToMatch);
   }
 
@@ -428,7 +362,7 @@ private:
 
 
   void handleBatchAck(
-    const ITransport::Ack& result,
+    const Crazyradio::Ack& result,
     bool crtpMode);
 
   template<typename R>
@@ -485,11 +419,11 @@ private:
   bool unregisterLogBlock(
     uint8_t id);
 
-  void setParam(uint16_t id, const ParamValue& value);
-  void addSetParam(uint16_t id, const ParamValue& value);
+  void setParam(uint8_t id, const ParamValue& value);
+  void addSetParam(uint8_t id, const ParamValue& value);
 
 
-  const ParamValue& getParam(uint16_t id) const {
+  const ParamValue& getParam(uint8_t id) const {
     return m_paramValues.at(id);
   }
 
@@ -506,14 +440,13 @@ private:
   std::map<uint8_t, std::function<void(crtpLogDataResponse*, uint8_t)> > m_logBlockCb;
 
   std::vector<ParamTocEntry> m_paramTocEntries;
-  std::map<uint16_t, ParamValue> m_paramValues;
+  std::map<uint8_t, ParamValue> m_paramValues;
 
   std::vector<MemoryTocEntry> m_memoryTocEntries;
 
   std::function<void(const crtpPlatformRSSIAck*)> m_emptyAckCallback;
   std::function<void(float)> m_linkQualityCallback;
   std::function<void(const char*)> m_consoleCallback;
-  std::function<void(const ITransport::Ack&)> m_genericPacketCallback;
 
   template<typename T>
   friend class LogBlock;
@@ -529,15 +462,12 @@ private:
   };
   std::vector<batchRequest> m_batchRequests;
   size_t m_numRequestsFinished;
-  size_t m_numRequestsEnqueued;
 
   int m_curr_up;
   int m_curr_down;
 
   bool m_log_use_V2;
   bool m_param_use_V2;
-
-  int m_protocolVersion;
 
   // logging
   Logger& m_logger;
@@ -557,20 +487,15 @@ public:
   {
     m_id = m_cf->registerLogBlock([=](crtpLogDataResponse* r, uint8_t s) { this->handleData(r, s);});
     if (m_cf->m_log_use_V2) {
-      std::vector<logBlockItemV2> logBlockItems;
-      size_t s = 0;
+      crtpLogCreateBlockV2Request request;
+      request.id = m_id;
+      int i = 0;
       for (auto&& pair : variables) {
         const Crazyflie::LogTocEntry* entry = m_cf->getLogTocEntry(pair.first, pair.second);
         if (entry) {
-          s += Crazyflie::size(entry->type);
-          if (s > 26) {
-            std::stringstream sstr;
-            sstr << "Can't configure that many variables in a single log block!"
-                 << " Ignoring " << pair.first << "." << pair.second << std::endl;
-            throw std::runtime_error(sstr.str());
-          } else {
-            logBlockItems.push_back({static_cast<uint8_t>(entry->type), entry->id});
-          }
+          request.items[i].logType = entry->type;
+          request.items[i].id = entry->id;
+          ++i;
         }
         else {
           std::stringstream sstr;
@@ -579,31 +504,16 @@ public:
         }
       }
 
-      // we can use up to 9 items per request
-      size_t requests = ceil(logBlockItems.size() / 9.0f);
-      size_t i = 0;
-      for (size_t r = 0; r < requests; ++r) {
-        size_t numElements = std::min<size_t>(logBlockItems.size() - i, 9);
-        if (r == 0) {
-          crtpLogCreateBlockV2Request request;
-          request.id = m_id;
-          memcpy(request.items, &logBlockItems[i], sizeof(logBlockItemV2) * numElements);
-          m_cf->sendPacketOrTimeoutInternal(reinterpret_cast<const uint8_t*>(&request), 3 + 3*numElements);
-        } else {
-          crtpLogAppendBlockV2Request request;
-          request.id = m_id;
-          memcpy(request.items, &logBlockItems[i], sizeof(logBlockItemV2) * numElements);
-          m_cf->sendPacketOrTimeoutInternal(reinterpret_cast<const uint8_t*>(&request), 3 + 3*numElements);
-        }
-        i += numElements;
+      m_cf->startBatchRequest();
+      m_cf->addRequest(reinterpret_cast<const uint8_t*>(&request), 3 + 3*i, 2);
+      m_cf->handleRequests();
+      auto r = m_cf->getRequestResult<crtpLogControlResponse>(0);
+      if (r->result != crtpLogControlResultOk
+          && r->result != crtpLogControlResultBlockExists) {
+        std::stringstream sstr;
+        sstr << "Could not create log block! Result: " << (int)r->result << " " << (int)m_id << " " << (int)r->requestByte1 << " " << (int)r->command;
+        throw std::runtime_error(sstr.str());
       }
-      // auto r = m_cf->getRequestResult<crtpLogControlResponse>(0);
-      // if (r->result != crtpLogControlResultOk
-      //     && r->result != crtpLogControlResultBlockExists) {
-      //   std::stringstream sstr;
-      //   sstr << "Could not create log block! Result: " << (int)r->result << " " << (int)m_id << " " << (int)r->requestByte1 << " " << (int)r->command;
-      //   throw std::runtime_error(sstr.str());
-      // }
     } else {
       crtpLogCreateBlockRequest request;
       request.id = m_id;
@@ -623,7 +533,7 @@ public:
       }
 
       m_cf->startBatchRequest();
-      m_cf->addRequestInternal(reinterpret_cast<const uint8_t*>(&request), 3 + 2*i, 2);
+      m_cf->addRequest(reinterpret_cast<const uint8_t*>(&request), 3 + 2*i, 2);
       m_cf->handleRequests();
       auto r = m_cf->getRequestResult<crtpLogControlResponse>(0);
       if (r->result != crtpLogControlResultOk
@@ -712,17 +622,10 @@ public:
                  << " Ignoring " << first << "." << second << std::endl;
             throw std::runtime_error(sstr.str());
           } else {
-            if (i < 9) {
-              request.items[i].logType = entry->type;
-              request.items[i].id = entry->id;
-              ++i;
-              m_types.push_back(entry->type);
-            } else {
-              std::stringstream sstr;
-              sstr << "Can only log up to 9 variables at a time!"
-                   << " Ignoring " << first << "." << second << std::endl;
-              throw std::runtime_error(sstr.str());
-            }
+            request.items[i].logType = entry->type;
+            request.items[i].id = entry->id;
+            ++i;
+            m_types.push_back(entry->type);
           }
         }
         else {
@@ -732,7 +635,7 @@ public:
         }
       }
       m_cf->startBatchRequest();
-      m_cf->addRequestInternal(reinterpret_cast<const uint8_t*>(&request), 3 + 3*i, 2);
+      m_cf->addRequest(reinterpret_cast<const uint8_t*>(&request), 3 + 3*i, 2);
       m_cf->handleRequests();
       auto r = m_cf->getRequestResult<crtpLogControlResponse>(0);
       if (r->result != crtpLogControlResultOk
@@ -770,7 +673,7 @@ public:
         }
       }
       m_cf->startBatchRequest();
-      m_cf->addRequestInternal(reinterpret_cast<const uint8_t*>(&request), 3 + 2*i, 2);
+      m_cf->addRequest(reinterpret_cast<const uint8_t*>(&request), 3 + 2*i, 2);
       m_cf->handleRequests();
       auto r = m_cf->getRequestResult<crtpLogControlResponse>(0);
       if (r->result != crtpLogControlResultOk
@@ -804,7 +707,7 @@ public:
   }
 
 private:
-  void handleData(crtpLogDataResponse* response, uint8_t /*size*/) {
+  void handleData(crtpLogDataResponse* response, uint8_t size) {
 
     std::vector<double> result;
     size_t pos = 0;
@@ -939,22 +842,22 @@ public:
     float qw;
   };
 
+  // Crazyswarm experimental
   void sendExternalPoses(
     const std::vector<externalPose>& data);
 
-  void emergencyStop();
-
-  void emergencyStopWatchdog();
-
-  template<class T>
-  void setParam(
-    const char* group,
-    const char* name,
-    const T& value)
-  {
-    crtpParamSetByNameRequest<T> request(group, name, value);
-    sendPacket(reinterpret_cast<const uint8_t*>(&request), request.size());
-  }
+  // // Parameter support
+  // template<class T>
+  // void setParam(
+  //   uint8_t group,
+  //   uint8_t id,
+  //   Crazyflie::ParamType type,
+  //   const T& value)
+  // {
+  //   Crazyflie::ParamValue v;
+  //   memcpy(&v, &value, sizeof(value));
+  //   setParam(group, id, type, v);
+  // }
 
 protected:
   void sendPacket(

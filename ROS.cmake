@@ -38,7 +38,6 @@ add_library(crazyflie_cpp
   src/CrazyflieUSB.cpp
   src/Crazyflie.cpp
   src/crtp.cpp
-  src/ITransport.cpp
 )
 
 ## Specify libraries to link a library or executable target against

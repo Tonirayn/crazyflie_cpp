@@ -1,7 +1,6 @@
 #pragma once
 
 #include <stdint.h>
-#include <fstream>
 
 class ITransport
 {
@@ -22,11 +21,6 @@ public:
   }__attribute__((packed));
 
 public:
-  ITransport()
-    : m_enableLogging(false)
-  {
-  }
-
   virtual ~ITransport() {}
 
   virtual void sendPacket(
@@ -37,20 +31,4 @@ public:
   virtual void sendPacketNoAck(
     const uint8_t* data,
     uint32_t length) = 0;
-
-
-  void enableLogging(
-    bool enable);
-
-protected:
-  void logPacket(
-    const uint8_t* data,
-    uint32_t length);
-
-  void logAck(
-    const Ack& ack);
-
-protected:
-  bool m_enableLogging;
-  std::ofstream m_file;
 };

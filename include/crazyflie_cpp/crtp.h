@@ -6,12 +6,9 @@
 static int const CRTP_MAX_DATA_SIZE = 30;
 static int const CRTP_MAXSIZE = 31;
 #define CHECKSIZE(s) static_assert(sizeof(s) <= CRTP_MAXSIZE, #s " packet is too large");
-#define CHECKSIZE_WITH_STATE(s, stateSize) static_assert(sizeof(s) - stateSize <= CRTP_MAXSIZE, #s " packet is too large");
 
 static int const CRTP_MAXSIZE_RESPONSE = 32;
 #define CHECKSIZE_RESPONSE(s) static_assert(sizeof(s) <= CRTP_MAXSIZE_RESPONSE, #s " packet is too large");
-
-void quatdecompress(uint32_t comp, float q[4]);
 
 // Header
 struct crtp
@@ -51,11 +48,6 @@ typedef struct {
   };
 } crtpPacket_t;
 
-struct crtpEmpty
-{
-  const uint8_t cmd = 0xFF;
-};
-
 // Port 0 (Console)
 struct crtpConsoleResponse
 {
@@ -69,17 +61,6 @@ struct crtpConsoleResponse
 CHECKSIZE_RESPONSE(crtpConsoleResponse)
 
 // Port 2 (Parameters)
-
-enum ParamType : uint8_t 
-{
-  ParamTypeUint8  = 0x00 | (0x00<<2) | (0x01<<3),
-  ParamTypeInt8   = 0x00 | (0x00<<2) | (0x00<<3),
-  ParamTypeUint16 = 0x01 | (0x00<<2) | (0x01<<3),
-  ParamTypeInt16  = 0x01 | (0x00<<2) | (0x00<<3),
-  ParamTypeUint32 = 0x02 | (0x00<<2) | (0x01<<3),
-  ParamTypeInt32  = 0x02 | (0x00<<2) | (0x00<<3),
-  ParamTypeFloat  = 0x02 | (0x01<<2) | (0x00<<3),
-};
 
 struct crtpParamTocGetItemResponse;
 struct crtpParamTocGetItemRequest
@@ -354,58 +335,6 @@ struct crtpParamValueV2Response
   };
 } __attribute__((packed));
 CHECKSIZE_RESPONSE(crtpParamValueV2Response)
-
-template <class T>
-struct crtpParamSetByNameRequest
-{
-  crtpParamSetByNameRequest(
-    const char* group,
-    const char* name,
-    const T& value);
-
-    const crtp header;
-    const uint8_t cmd = 0;
-    uint8_t data[29];
-
-  uint8_t size() const {
-    return size_;
-  }
-
-  uint8_t responseSize() const {
-    return responseSize_;
-  }
-
-private:
-    // member state (not part of packet)
-    uint8_t size_;
-    uint8_t responseSize_;
-
-private:
-  crtpParamSetByNameRequest(
-    const char* group,
-    const char* name,
-    uint8_t paramType,
-    const void* value,
-    uint8_t valueSize);
-} __attribute__((packed));
-CHECKSIZE_WITH_STATE(crtpParamSetByNameRequest<float>, 2) // largest kind of param
-
-struct crtpParamSetByNameResponse
-{
-  static bool match(const Crazyradio::Ack& response) {
-    return response.size > 2 &&
-           (crtp(response.data[0]) == crtp(2, 3));
-  }
-
-  uint8_t data[32];
-
-  uint8_t error(uint8_t responseSize) const {
-    return data[responseSize];
-  }
-
-} __attribute__((packed));
-CHECKSIZE_RESPONSE(crtpParamSetByNameResponse) // largest kind of param
-
 
 // Port 3 (Commander)
 
@@ -870,20 +799,6 @@ struct crtpLogCreateBlockV2Request
 } __attribute__((packed));
 CHECKSIZE(crtpLogCreateBlockV2Request)
 
-struct crtpLogAppendBlockV2Request
-{
-  crtpLogAppendBlockV2Request()
-  : header(5, 1)
-  , command(7)
-  {
-  }
-
-  const crtp header;
-  const uint8_t command;
-  uint8_t id;
-  logBlockItemV2 items[9];
-} __attribute__((packed));
-CHECKSIZE(crtpLogAppendBlockV2Request)
 
 // Port 0x06 (External Position Update)
 
@@ -921,78 +836,6 @@ struct crtpExternalPositionPacked
   } __attribute__((packed)) positions[4];
 }  __attribute__((packed));
 CHECKSIZE(crtpExternalPositionPacked)
-
-struct crtpEmergencyStopRequest
-{
-  crtpEmergencyStopRequest()
-    : header(0x06, 1)
-  {
-  }
-  const crtp header;
-  const uint8_t type = 3;
-}  __attribute__((packed));
-CHECKSIZE(crtpEmergencyStopRequest)
-
-struct crtpEmergencyStopWatchdogRequest
-{
-  crtpEmergencyStopWatchdogRequest()
-    : header(0x06, 1)
-  {
-  }
-  const crtp header;
-  const uint8_t type = 4;
-}  __attribute__((packed));
-CHECKSIZE(crtpEmergencyStopWatchdogRequest)
-
-struct crtpExternalPoseUpdate
-{
-  crtpExternalPoseUpdate(
-    float x,
-    float y,
-    float z,
-    float qx,
-    float qy,
-    float qz,
-    float qw)
-    : header(0x06, 1)
-    , x(x)
-    , y(y)
-    , z(z)
-    , qx(qx)
-    , qy(qy)
-    , qz(qz)
-    , qw(qw)
-  {
-  }
-  const crtp header;
-  const uint8_t type = 8;
-  float x;
-  float y;
-  float z;
-  float qx;
-  float qy;
-  float qz;
-  float qw;
-}  __attribute__((packed));
-CHECKSIZE(crtpExternalPoseUpdate)
-
-struct crtpExternalPosePacked
-{
-  crtpExternalPosePacked()
-    : header(0x06, 1)
-  {
-  }
-  const crtp header;
-  const uint8_t type = 9;
-  struct {
-    uint8_t id; // last 8 bit of the Crazyflie address
-    int16_t x; // mm
-    int16_t y; // mm
-    int16_t z; // mm
-    uint32_t quat; // compressed quaternion, see quatcompress.h
-  } __attribute__((packed)) poses[2];
-}  __attribute__((packed));
-CHECKSIZE(crtpExternalPosePacked)
 
 struct crtpStopRequest
 {
@@ -1062,33 +905,32 @@ struct crtpFullStateSetpointRequest
 } __attribute__((packed));
 CHECKSIZE(crtpFullStateSetpointRequest)
 
-struct crtpVelocityWorldSetpointRequest
-{
-  crtpVelocityWorldSetpointRequest(
-      float x, float y, float z, float yawRate)
-      : header(0X07, 0), type(1), x(x), y(y), z(z), yawRate(yawRate)
-  {
-  }
-  const crtp header;
-  uint8_t type;
-  float x;
-  float y;
-  float z;
-  float yawRate;
-}__attribute__((packed));
-CHECKSIZE(crtpVelocityWorldSetpointRequest);
 
-struct crtpNotifySetpointsStopRequest
+struct crtpGainsRequest
 {
-  crtpNotifySetpointsStopRequest(uint32_t remainValidMillisecs)
-    : header(0x07, 1), type(0), remainValidMillisecs(remainValidMillisecs)
-  {
-  }
+  crtpGainsRequest(
+  float gain1, float gain2, float gain3,
+  float gain4, float gain5, float gain6,
+  float gain7, float gain8, float gain9,
+  float gain10, float gain11, float gain12, uint8_t port);
   const crtp header;
   uint8_t type;
-  uint32_t remainValidMillisecs;
-}__attribute__((packed));
-CHECKSIZE(crtpNotifySetpointsStopRequest);
+  int16_t gain1;
+  int16_t gain2;
+  int16_t gain3;
+  int16_t gain4;
+  int16_t gain5;
+  int16_t gain6;
+  int16_t gain7;
+  int16_t gain8;
+  int16_t gain9;
+  int16_t gain10;
+  int16_t gain11; 
+  int16_t gain12;
+} __attribute__((packed));
+CHECKSIZE(crtpFullStateSetpointRequest)
+
+
 
 // Port 0x08 (High-level Setpoints)
 
@@ -1271,64 +1113,42 @@ struct crtpCommanderHighLevelDefineTrajectoryRequest
 } __attribute__((packed));
 CHECKSIZE(crtpCommanderHighLevelDefineTrajectoryRequest)
 
+// Port 11 CrazySwarm Experimental
+
+typedef uint16_t fp16_t;
+typedef int16_t posFixed16_t;
+typedef struct posFixed24_t
+{
+  uint8_t low;
+  uint8_t middle;
+  uint8_t high;
+} posFixed24_t;
+
+struct data_mocap {
+  struct {
+    uint8_t id;
+    posFixed24_t x; // m
+    posFixed24_t y; // m
+    posFixed24_t z; // m
+    uint32_t quat; // compressed quat, see quatcompress.h
+  } __attribute__((packed)) pose[2];
+} __attribute__((packed));
+
+struct crtpPosExtBringup
+{
+  crtpPosExtBringup()
+    : header(11, 1)
+    {
+      data.pose[0].id = 0;
+      data.pose[1].id = 0;
+    }
+
+    const crtp header;
+    struct data_mocap data;
+} __attribute__((packed));
+CHECKSIZE(crtpPosExtBringup)
+
 // Port 13 (Platform)
-
-struct crtpGetProtocolVersionRequest
-{
-  crtpGetProtocolVersionRequest()
-    : header(0x0D, 1)
-    {
-    }
-
-    const crtp header;
-    const uint8_t cmd = 0;
-} __attribute__((packed));
-CHECKSIZE(crtpGetProtocolVersionRequest)
-
-struct crtpGetProtocolVersionResponse
-{
-  crtpGetProtocolVersionRequest request;
-  int version;
-} __attribute__((packed));
-CHECKSIZE_RESPONSE(crtpGetProtocolVersionResponse)
-
-struct crtpGetFirmwareVersionRequest
-{
-  crtpGetFirmwareVersionRequest()
-    : header(0x0D, 1)
-    {
-    }
-
-    const crtp header;
-    const uint8_t cmd = 1;
-} __attribute__((packed));
-CHECKSIZE(crtpGetProtocolVersionRequest)
-
-struct crtpGetFirmwareVersionResponse
-{
-  crtpGetFirmwareVersionRequest request;
-  char version[30];
-} __attribute__((packed));
-CHECKSIZE_RESPONSE(crtpGetFirmwareVersionResponse)
-
-struct crtpGetDeviceTypeNameRequest
-{
-  crtpGetDeviceTypeNameRequest()
-    : header(0x0D, 1)
-    {
-    }
-
-    const crtp header;
-    const uint8_t cmd = 2;
-} __attribute__((packed));
-CHECKSIZE(crtpGetProtocolVersionRequest)
-
-struct crtpGetDeviceTypeNameResponse
-{
-  crtpGetDeviceTypeNameRequest request;
-  char name[30];
-} __attribute__((packed));
-CHECKSIZE_RESPONSE(crtpGetDeviceTypeNameResponse)
 
 // The crazyflie-nrf firmware sends empty packets with the signal strength, if nothing else is in the queue
 struct crtpPlatformRSSIAck
